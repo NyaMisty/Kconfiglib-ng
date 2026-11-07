@@ -1478,6 +1478,11 @@ class Kconfig(object):
             if not sym._write_to_conf:
                 continue
 
+            # Transitional symbols are omitted from autoconf.h too (see
+            # SYMBOL_TRANS in the C implementation)
+            if sym.is_transitional:
+                continue
+
             if sym.orig_type in _BOOL_TRISTATE:
                 if val == "y":
                     add("#define {}{} 1\n"
@@ -3283,6 +3288,25 @@ class Kconfig(object):
 
                 node.item.is_optional = True
 
+            elif t0 is _T_TRANSITIONAL:
+                # 'transitional' was added in Linux 6.18 (kconfig: add
+                # transitional symbol attribute). It declares a symbol as a
+                # compatibility alias for a renamed symbol: the symbol keeps
+                # being evaluated (so old .config files still work), but it is
+                # never written out to new .config files. See the C
+                # implementation (SYMBOL_TRANS in scripts/kconfig/).
+                if node.item.__class__ is not Symbol:
+                    self._parse_error('"transitional" is only valid for '
+                                      'symbols')
+
+                if node.item.is_transitional:
+                    self._warn(node.item.name_and_loc +
+                               " has multiple 'transitional' properties in "
+                               "single location",
+                               self.filename, self.linenr)
+
+                node.item.is_transitional = True
+
             else:
                 # Reuse the tokens for the non-property line later
                 self._reuse_tokens = True
@@ -4269,6 +4293,7 @@ class Symbol(object):
         "implies",
         "is_allnoconfig_y",
         "is_constant",
+        "is_transitional",
         "kconfig",
         "name",
         "nodes",
@@ -4547,6 +4572,11 @@ class Symbol(object):
         if not self._write_to_conf:
             return ""
 
+        # Transitional symbols are never written to .config files (see
+        # SYMBOL_TRANS in the C implementation)
+        if self.is_transitional:
+            return ""
+
         if self.orig_type in _BOOL_TRISTATE:
             return "{}{}={}\n" \
                    .format(self.kconfig.config_prefix, self.name, val) \
@@ -4818,6 +4848,7 @@ class Symbol(object):
         # Symbol gets a .config entry.
 
         self.is_allnoconfig_y = \
+        self.is_transitional = \
         self._was_set = \
         self._write_to_conf = False
 
@@ -6303,6 +6334,12 @@ def _visibility(sc):
     # e.g. 'make menuconfig'. This function calculates the visibility for the
     # Symbol or Choice 'sc' -- the logic is nearly identical.
 
+    # Transitional symbols are always considered visible, so that user values
+    # for them from old .config files take effect (they are not written out
+    # though). This mirrors sym_calc_visibility() in the C implementation.
+    if sc.__class__ is Symbol and sc.is_transitional:
+        return 2
+
     vis = 0
 
     for node in sc.nodes:
@@ -6910,10 +6947,11 @@ except AttributeError:
     _T_SELECT,
     _T_SOURCE,
     _T_STRING,
+    _T_TRANSITIONAL,
     _T_TRISTATE,
     _T_UNEQUAL,
     _T_VISIBLE,
-) = range(1, 51)
+) = range(1, 52)
 
 # Keyword to token map, with the get() method assigned directly as a small
 # optimization
@@ -6959,6 +6997,7 @@ _get_keyword = {
     "select":         _T_SELECT,
     "source":         _T_SOURCE,
     "string":         _T_STRING,
+    "transitional":   _T_TRANSITIONAL,
     "tristate":       _T_TRISTATE,
     "visible":        _T_VISIBLE,
 }.get
